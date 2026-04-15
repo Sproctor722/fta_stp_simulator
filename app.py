@@ -20,18 +20,24 @@ from fta_rules import (
 
 def _select_loader():
     """Prefer live Databricks connection; fall back to CSV files."""
+    _loader_msg = None
     try:
         import databricks_loader
         if databricks_loader.is_configured():
             ok, msg = databricks_loader.test_connection()
             if ok:
-                return databricks_loader.load_all, "databricks"
-    except Exception:
-        pass
+                return databricks_loader.load_all, "databricks", msg
+            else:
+                _loader_msg = f"Databricks connection failed: {msg}"
+        else:
+            _loader_msg = "Databricks not configured — falling back to CSV"
+    except Exception as e:
+        import traceback
+        _loader_msg = f"Databricks loader error: {e}\n{traceback.format_exc()}"
     from real_data_loader import load_all
-    return load_all, "csv"
+    return load_all, "csv", _loader_msg
 
-_load_fn, _data_source = _select_loader()
+_load_fn, _data_source, _loader_msg = _select_loader()
 
 st.set_page_config(
     page_title="STP/FTA Duty Savings Simulator",
@@ -39,6 +45,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+if _loader_msg and _data_source == "csv":
+    st.error(f"⚠️ **Data Source Issue** — Could not connect to Databricks. Details below:")
+    st.code(_loader_msg, language="text")
+    st.info("The app will attempt to load from local CSV files as a fallback.")
 
 NIKE_ORANGE = "#FA5400"
 NIKE_BLACK = "#111111"
@@ -143,7 +154,12 @@ with st.sidebar:
 data = load_data()
 
 if data is None:
-    st.error("Real data files not found in real_data/ folder. Place the CSV exports there.")
+    if _data_source == "csv":
+        st.error("No data available. Databricks connection failed and no local CSV files found.")
+        if _loader_msg:
+            st.code(_loader_msg, language="text")
+    else:
+        st.error("Failed to load data from Databricks.")
     st.stop()
 
 lanes = data["lanes"]

@@ -96,7 +96,8 @@ def test_connection() -> tuple[bool, str]:
         mode = "service principal" if _USE_SERVICE_PRINCIPAL else "PAT"
         return True, f"Connected to nike-sole-react ({mode} auth)"
     except Exception as e:
-        return False, str(e)
+        import traceback
+        return False, f"{e}\n{traceback.format_exc()}"
 
 
 from real_data_loader import (

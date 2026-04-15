@@ -1,0 +1,7 @@
+streamlit
+pandas
+plotly
+numpy
+databricks-sdk
+databricks-sql-connector
+python-dotenv

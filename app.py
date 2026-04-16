@@ -139,7 +139,7 @@ def metric_card(label, value, delta="", delta_type="positive"):
     """
 
 
-_DATA_VERSION = 10  # bump: savings realized vs left on table cards
+_DATA_VERSION = 11  # bump: ROO awareness banner, difficulty badges, savings realized
 
 @st.cache_data(ttl=3600, show_spinner="Loading data from Databricks...")
 def load_data(_version=_DATA_VERSION):
@@ -299,6 +299,40 @@ with tab_gap:
     </div>
     """, unsafe_allow_html=True)
 
+    # ── ROO Awareness Banner ──
+    if _fta_agreements:
+        _fta_count = len(_fta_agreements)
+        _fta_origins = lanes[lanes["has_stp"] & (lanes["eligible_pct"] >= 0.01)]
+        _fta_with_rules = _fta_origins[_fta_origins.get("fta_name", pd.Series(dtype=str)).notna() & (_fta_origins.get("fta_name", pd.Series(dtype=str)) != "—")] if "fta_name" in _fta_origins.columns else pd.DataFrame()
+        _diff_counts = _fta_with_rules["fta_difficulty"].value_counts().to_dict() if not _fta_with_rules.empty and "fta_difficulty" in _fta_with_rules.columns else {}
+
+        _diff_pills = ""
+        for diff, cnt in sorted(_diff_counts.items(), key=lambda x: {"Easy": 0, "Moderate": 1, "Hard": 2}.get(x[0], 3)):
+            _dc = {"Easy": SAVINGS_GREEN, "Moderate": NIKE_ORANGE, "Hard": GAP_RED}.get(diff, NIKE_GRAY)
+            _diff_pills += (
+                f'<span style="background:{_dc}18;color:{_dc};font-weight:600;font-size:12px;'
+                f'padding:3px 10px;border-radius:12px;margin-right:6px;">'
+                f'{diff}: {cnt} lane{"s" if cnt != 1 else ""}</span>'
+            )
+
+        st.markdown(f"""
+        <div style="background:#F0F4FF; border-radius:10px; padding:14px 20px; margin:12px 0 16px 0;
+                    border:1px solid #D0D8F0; display:flex; align-items:center; gap:16px;">
+            <div style="font-size:24px;">📋</div>
+            <div style="flex:1;">
+                <div style="font-weight:600; font-size:14px; color:#1A1A2E; margin-bottom:4px;">
+                    Rules of Origin Aware
+                </div>
+                <div style="font-size:12px; color:#555;">
+                    This analysis incorporates Rules of Origin from <strong>{_fta_count} trade agreements</strong>
+                    covering {len(_fta_with_rules)} STP-eligible lanes.
+                    ROO difficulty is assessed per lane to inform qualification effort.
+                </div>
+                <div style="margin-top:6px;">{_diff_pills}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
     fq_counts = meta.get("fiscal_quarter_counts", {})
     if fq_counts:
         st.markdown('<div class="section-header">Declaration Volume by Fiscal Quarter</div>', unsafe_allow_html=True)
@@ -331,16 +365,26 @@ with tab_gap:
         for _, r in _top_excess.iterrows():
             _prog = ", ".join(r["stp_programs"][:2]) if r["stp_programs"] else "STP"
             _diff = r.get("fta_difficulty", "—")
+            _fta = r.get("fta_name", "—") if "fta_name" in r.index else "—"
+            _dc = {"Easy": SAVINGS_GREEN, "Moderate": NIKE_ORANGE, "Hard": GAP_RED}.get(_diff, NIKE_GRAY)
+            _diff_badge = (
+                f'<span style="background:{_dc}18;color:{_dc};font-weight:600;font-size:11px;'
+                f'padding:1px 7px;border-radius:8px;">{_diff}</span>'
+            ) if _diff != "—" else ""
+            _fta_label = f"{_fta} " if _fta not in ("—", "None") else ""
             _gap_parts.append(
-                f"{r['origin_name']} &rarr; {r['dest_name']}: "
-                f"<strong>{fmt_usd(r['excess_duty_usd'])}</strong> savings "
-                f"({r['gen_rate']:.1%} GEN &rarr; "
-                f"{r['stp_rate']:.1%} under {_prog}), "
-                f"ROO difficulty: {_diff}, utilization: <strong>{r['utilization_pct']:.1%}</strong>."
+                f"<div style='margin-bottom:4px;'>"
+                f"<strong>{r['origin_name']} &rarr; {r['dest_name']}:</strong> "
+                f"<strong>{fmt_usd(r['excess_duty_usd'])}</strong> "
+                f"({r['gen_rate']:.1%} GEN &rarr; {r['stp_rate']:.1%} under {_prog}) "
+                f"&middot; {_fta_label}{_diff_badge} "
+                f"&middot; utilization: <strong>{r['utilization_pct']:.1%}</strong>"
+                f"</div>"
             )
         st.markdown(f"""
         <div class="gap-highlight">
-            <strong>Largest savings opportunities:</strong> {" ".join(_gap_parts)}
+            <strong>Largest savings opportunities:</strong>
+            <div style="margin-top:6px;">{"".join(_gap_parts)}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -454,8 +498,9 @@ with tab_gap:
             name if (stp or pot) else "—"
             for name, stp, pot in zip(display_table["Best FTA"], _has_stp_raw, _has_potential)
         ]
+        _diff_marker = {"Easy": "🟢 Easy", "Moderate": "🟡 Moderate", "Hard": "🔴 Hard"}
         display_table["Difficulty"] = [
-            d if (stp or pot) else "—"
+            _diff_marker.get(d, d) if (stp or pot) else "—"
             for d, stp, pot in zip(display_table["Difficulty"], _has_stp_raw, _has_potential)
         ]
         display_table["Key Rule"] = [
@@ -1056,12 +1101,16 @@ with tab_util:
                 _diff_color_map = {"Easy": SAVINGS_GREEN, "Moderate": NIKE_ORANGE, "Hard": GAP_RED}
                 _dc = _diff_color_map.get(_lane_diff, NIKE_GRAY)
 
+                _diff_badge = ""
+                if _lane_diff and _lane_diff not in ("—", "None"):
+                    _diff_badge = (
+                        f'<span style="background:{_dc}18;color:{_dc};font-weight:600;font-size:10px;'
+                        f'padding:2px 8px;border-radius:10px;margin-left:8px;">{_lane_diff} ROO</span>'
+                    )
+
                 _fta_line = ""
                 if _lane_fta and _lane_fta != "—" and _lane_fta != "None":
-                    _fta_line = (
-                        f' &middot; <span style="color:{_dc};font-weight:600;">{_lane_diff}</span>'
-                        f' ({_lane_fta}: {_lane_rule})'
-                    )
+                    _fta_line = f' &middot; {_lane_fta}: {_lane_rule}'
                 elif _lane_fta == "None":
                     _fta_line = f' &middot; <span style="color:{GAP_RED};">No FTA</span>'
 
@@ -1075,6 +1124,7 @@ with tab_util:
                             display:flex; justify-content:space-between; align-items:center;">
                     <div style="flex:2;">
                         <span style="font-weight:600;">{lane['origin_name']} &rarr; {lane['dest_name']}</span>
+                        {_diff_badge}
                         <div style="font-size:12px; color:#757575; margin-top:2px;">
                             {progs} &middot; {lane['stp_total_products']:,.0f} products &middot;
                             Qualification: {qual:.0%} &middot;

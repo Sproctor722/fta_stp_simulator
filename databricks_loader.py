@@ -271,17 +271,19 @@ PROGRAM_STATUS = {
 }
 
 
-def _lane_agg_sql() -> str:
+def _lane_agg_sql(dest_filter: str = "US") -> str:
     """Lane-level duty aggregates from published views.
     Uses commodity_tariff_v PAYABLE_PRC (GEN type) as primary goods value,
     falling back to CUSTOMS_AMT_USD when commodity_tariff data is missing.
     Also pulls AD_VALOREM_BASE_PRC as actual assessed duty amount.
     Filters via dts.IMPORT_COUNTRY_CD (dfh_v join is broken for SOLE source)."""
+    _dest_col = f"'{dest_filter}'" if dest_filter != "ALL" else "dts.IMPORT_COUNTRY_CD"
+    _dest_where = f"AND dts.IMPORT_COUNTRY_CD = '{dest_filter}'" if dest_filter != "ALL" else ""
     return f"""
     WITH base AS (
         SELECT
             COALESCE(cc.COUNTRY_OF_ORIGIN_CD, dts.EXPORT_COUNTRY_CD) AS country_of_origin_cd,
-            'US' AS country_of_destination_cd,
+            {_dest_col} AS country_of_destination_cd,
             SUBSTRING(CAST(cc.HTS_CD AS STRING), 1, 4) AS hts_chapter,
             SUBSTRING(CAST(cc.HTS_CD AS STRING), 1, 2) AS hts_2digit,
             CAST(COALESCE(
@@ -306,7 +308,7 @@ def _lane_agg_sql() -> str:
             AND ct_gen.TARIFF_TYPE_CD = 'GEN'
         WHERE de.ACCEPTANCE_TMST >= '{FY_START}'
           AND de.ACCEPTANCE_TMST < '{FY_END}'
-          AND dts.IMPORT_COUNTRY_CD = 'US'
+          {_dest_where}
     )
     SELECT
         country_of_origin_cd,
@@ -496,6 +498,15 @@ def load_lane_summary(stp_df: pd.DataFrame, hs_gv_df: pd.DataFrame = None) -> pd
     lanes["stp_duty_usd"] = (
         lanes["eligible_goods_value_usd"] * lanes["stp_rate"]
         + (lanes["goods_value_usd"] - lanes["eligible_goods_value_usd"]) * lanes["gen_rate"]
+    )
+
+    # Savings realized = duty avoided on the ELIGIBLE portion that DID claim STP.
+    lanes["savings_realized_usd"] = np.where(
+        lanes["has_stp"],
+        (lanes["eligible_goods_value_usd"]
+         * (lanes["gen_rate"] - lanes["stp_rate"])
+         * lanes["utilization_pct"]).clip(lower=0),
+        0.0,
     )
 
     # Excess duty = overpayment on the ELIGIBLE portion not claiming STP.
@@ -980,6 +991,7 @@ def load_all():
     total_gen_duty = float(lanes_df["gen_duty_usd"].sum())
     total_stp_duty = float(lanes_df["stp_duty_usd"].sum())
     total_savings_potential = float(lanes_df["excess_duty_usd"].sum())
+    total_savings_realized = float(lanes_df["savings_realized_usd"].sum())
 
     # Assessed duty from commodity_tariff_v (actual duty amounts where available)
     total_assessed_duty = float(lanes_df["assessed_duty_total"].sum()) if "assessed_duty_total" in lanes_df.columns else 0.0
@@ -1019,6 +1031,7 @@ def load_all():
             "total_gen_duty": total_gen_duty,
             "total_stp_duty": total_stp_duty,
             "total_savings_potential": total_savings_potential,
+            "total_savings_realized": total_savings_realized,
             "total_assessed_duty": total_assessed_duty,
             "data_source": "databricks_live",
             "data_completeness_note": (

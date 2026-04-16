@@ -780,6 +780,14 @@ def build_lane_summary(duties_df: pd.DataFrame, stp_df: pd.DataFrame) -> pd.Data
         lanes["eligible_goods_value_usd"] * lanes["stp_rate"]
         + (lanes["goods_value_usd"] - lanes["eligible_goods_value_usd"]) * lanes["gen_rate"]
     )
+    # Savings realized: duty avoided on the eligible portion that DID claim STP
+    lanes["savings_realized_usd"] = np.where(
+        lanes["has_stp"],
+        (lanes["eligible_goods_value_usd"]
+         * (lanes["gen_rate"] - lanes["stp_rate"])
+         * lanes["utilization_pct"]).clip(lower=0),
+        0.0,
+    )
     # Excess duty: savings potential on the eligible portion only, adjusted for utilization
     lanes["excess_duty_usd"] = np.where(
         lanes["has_stp"],
@@ -842,6 +850,7 @@ def load_all():
     total_gen_duty = float(lanes_df["gen_duty_usd"].sum())
     total_stp_duty = float(lanes_df["stp_duty_usd"].sum())
     total_savings_potential = total_gen_duty - total_stp_duty
+    total_savings_realized = float(lanes_df["savings_realized_usd"].sum())
 
     return {
         "stp_eligibility": stp_df,
@@ -871,5 +880,6 @@ def load_all():
             "total_gen_duty": total_gen_duty,
             "total_stp_duty": total_stp_duty,
             "total_savings_potential": total_savings_potential,
+            "total_savings_realized": total_savings_realized,
         },
     }

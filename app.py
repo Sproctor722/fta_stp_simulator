@@ -139,7 +139,7 @@ def metric_card(label, value, delta="", delta_type="positive"):
     """
 
 
-_DATA_VERSION = 9  # bump: removed ROO discount multiplier; difficulty is informational only
+_DATA_VERSION = 10  # bump: savings realized vs left on table cards
 
 @st.cache_data(ttl=3600, show_spinner="Loading data from Databricks...")
 def load_data(_version=_DATA_VERSION):
@@ -236,7 +236,8 @@ with tab_gap:
     total_gen_duty = meta["total_gen_duty"]
     total_stp_duty = meta["total_stp_duty"]
     total_savings = meta["total_savings_potential"]
-    total_excess = gap_lanes["excess_duty_usd"].sum()
+    total_savings_realized = meta.get("total_savings_realized", 0)
+    total_excess = lanes[lanes["has_stp"] & (lanes["eligible_pct"] >= 0.01)]["excess_duty_usd"].sum()
     gap_lane_count = len(gap_lanes)
     total_lanes_with_stp = len(effective_stp_lanes)
 
@@ -258,9 +259,9 @@ with tab_gap:
         ), unsafe_allow_html=True)
     with cols[1]:
         st.markdown(metric_card(
-            "Est. Duty Savings",
-            fmt_usd(total_excess),
-            f"Potential savings on {gap_lane_count} gap lanes",
+            "Duty Savings Realized",
+            fmt_usd(total_savings_realized),
+            f"Saved by claiming STPs across {total_lanes_with_stp} eligible lanes",
             "positive"
         ), unsafe_allow_html=True)
     with cols[2]:
@@ -279,9 +280,9 @@ with tab_gap:
         ), unsafe_allow_html=True)
     with cols[4]:
         st.markdown(metric_card(
-            "Excess Duty on Gap Lanes",
+            "Savings Left on the Table",
             fmt_usd(total_excess),
-            f"{gap_lane_count} lanes &lt;50% utilization",
+            f"Not claimed across {total_lanes_with_stp} STP-eligible lanes",
             "negative"
         ), unsafe_allow_html=True)
 
@@ -289,8 +290,9 @@ with tab_gap:
     <div class="insight-box">
         <strong>FY26 US Imports ({meta['duties_date_range']}):</strong>
         Across <strong>{fmt_usd(total_goods_value, 0)}</strong> in customs goods value
-        ({total_line_items:,.0f} line items), only <strong>{overall_util:.1%}</strong> received preferential treatment.
-        The estimated duty savings opportunity is <strong>{fmt_usd(total_excess)}</strong>
+        ({total_line_items:,.0f} line items), <strong>{overall_util:.1%}</strong> received preferential treatment.
+        STP claims saved <strong>{fmt_usd(total_savings_realized)}</strong> in duty,
+        while <strong>{fmt_usd(total_excess)}</strong> in savings was left on the table
         across {total_lanes_with_stp} STP-eligible lanes.
         <em>Rates: MFN base from Databricks tariff schedule + FY26 surcharges
         (IEEPA reciprocal Apr 2025&ndash;Feb 2026, Section 122 15% Feb 24 2026+).</em>

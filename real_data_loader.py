@@ -656,7 +656,12 @@ def get_filing_list_for_lane(claims_df: pd.DataFrame, origin_cd: str, dest_cd: s
     if lane.empty:
         return pd.DataFrame()
 
-    filing_list = lane.groupby(["entry_id", "filing_reference_nbr", "declaration_identification_nbr"]).agg(
+    _group_id = "declaration_entry_uid" if "declaration_entry_uid" in lane.columns else "entry_id"
+    lane["_group_key"] = lane[_group_id].fillna(lane.index.astype(str))
+    lane["filing_reference_nbr"] = lane["filing_reference_nbr"].fillna("—")
+
+    filing_list = lane.groupby("_group_key").agg(
+        filing_reference_nbr=("filing_reference_nbr", "first"),
         acceptance_date=("acceptance_dt", "first"),
         line_items=("line_item_nbr", "count"),
         total_duty=("estimated_gen_duty", "sum"),
@@ -666,7 +671,7 @@ def get_filing_list_for_lane(claims_df: pd.DataFrame, origin_cd: str, dest_cd: s
         origin=("origin_name", "first"),
         destination=("dest_name", "first"),
         declaration_status=("declaration_status_desc", "first"),
-    ).reset_index().sort_values("days_remaining", ascending=True)
+    ).reset_index(drop=True).sort_values("days_remaining", ascending=True)
 
     return filing_list
 

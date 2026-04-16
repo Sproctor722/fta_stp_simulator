@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 from real_data_loader import PROGRAM_NAMES, COUNTRY_NAMES, PSC_WINDOW_DAYS, get_filing_list_for_lane
 from fta_rules import (
     load_all_ftas, enrich_lanes_with_fta, get_fta_info_for_origin,
-    find_agreements_for_lane, _summarize_rule_for_lane, get_roo_discount,
+    find_agreements_for_lane, _summarize_rule_for_lane,
 )
 
 def _select_loader():
@@ -139,7 +139,7 @@ def metric_card(label, value, delta="", delta_type="positive"):
     """
 
 
-_DATA_VERSION = 8  # bump: ROO difficulty discount integrated into calculations
+_DATA_VERSION = 9  # bump: removed ROO discount multiplier; difficulty is informational only
 
 @st.cache_data(ttl=3600, show_spinner="Loading data from Databricks...")
 def load_data(_version=_DATA_VERSION):
@@ -180,10 +180,6 @@ def _cached_ftas():
 _fta_agreements = _cached_ftas()
 if _fta_agreements:
     enrich_lanes_with_fta(lanes, _fta_agreements)
-else:
-    lanes["roo_discount"] = 0.50
-
-lanes["roo_adjusted_excess_duty"] = lanes["excess_duty_usd"] * lanes["roo_discount"]
 
 # ── Header ───────────────────────────────────────────────────────────
 _is_live = meta.get("data_source") == "databricks_live"
@@ -241,7 +237,6 @@ with tab_gap:
     total_stp_duty = meta["total_stp_duty"]
     total_savings = meta["total_savings_potential"]
     total_excess = gap_lanes["excess_duty_usd"].sum()
-    total_roo_adjusted_excess = gap_lanes["roo_adjusted_excess_duty"].sum()
     gap_lane_count = len(gap_lanes)
     total_lanes_with_stp = len(effective_stp_lanes)
 
@@ -263,9 +258,9 @@ with tab_gap:
         ), unsafe_allow_html=True)
     with cols[1]:
         st.markdown(metric_card(
-            "Est. Duty Savings (ROO-Adjusted)",
-            fmt_usd(total_roo_adjusted_excess),
-            f"Max theoretical: {fmt_usd(total_excess)} — discounted by ROO qualification difficulty",
+            "Est. Duty Savings",
+            fmt_usd(total_excess),
+            f"Potential savings on {gap_lane_count} gap lanes",
             "positive"
         ), unsafe_allow_html=True)
     with cols[2]:
@@ -286,7 +281,7 @@ with tab_gap:
         st.markdown(metric_card(
             "Excess Duty on Gap Lanes",
             fmt_usd(total_excess),
-            f"ROO-adjusted realistic: {fmt_usd(total_roo_adjusted_excess)} &middot; {gap_lane_count} lanes &lt;50% utilization",
+            f"{gap_lane_count} lanes &lt;50% utilization",
             "negative"
         ), unsafe_allow_html=True)
 
@@ -295,8 +290,7 @@ with tab_gap:
         <strong>FY26 US Imports ({meta['duties_date_range']}):</strong>
         Across <strong>{fmt_usd(total_goods_value, 0)}</strong> in customs goods value
         ({total_line_items:,.0f} line items), only <strong>{overall_util:.1%}</strong> received preferential treatment.
-        The estimated realistic duty savings &mdash; adjusted for Rules of Origin qualification difficulty &mdash;
-        is <strong>{fmt_usd(total_roo_adjusted_excess)}</strong> (theoretical max: {fmt_usd(total_excess)})
+        The estimated duty savings opportunity is <strong>{fmt_usd(total_excess)}</strong>
         across {total_lanes_with_stp} STP-eligible lanes.
         <em>Rates: MFN base from Databricks tariff schedule + FY26 surcharges
         (IEEPA reciprocal Apr 2025&ndash;Feb 2026, Section 122 15% Feb 24 2026+).</em>
@@ -334,19 +328,17 @@ with tab_gap:
         _gap_parts = []
         for _, r in _top_excess.iterrows():
             _prog = ", ".join(r["stp_programs"][:2]) if r["stp_programs"] else "STP"
-            _roo_adj = r.get("roo_adjusted_excess_duty", r["excess_duty_usd"])
             _diff = r.get("fta_difficulty", "—")
             _gap_parts.append(
                 f"{r['origin_name']} &rarr; {r['dest_name']}: "
-                f"<strong>{fmt_usd(_roo_adj)}</strong> realistic savings "
-                f"(max {fmt_usd(r['excess_duty_usd'])} at {r['gen_rate']:.1%} GEN &rarr; "
+                f"<strong>{fmt_usd(r['excess_duty_usd'])}</strong> savings "
+                f"({r['gen_rate']:.1%} GEN &rarr; "
                 f"{r['stp_rate']:.1%} under {_prog}), "
-                f"ROO: {_diff}, utilization: <strong>{r['utilization_pct']:.1%}</strong>."
+                f"ROO difficulty: {_diff}, utilization: <strong>{r['utilization_pct']:.1%}</strong>."
             )
         st.markdown(f"""
         <div class="gap-highlight">
-            <strong>Largest savings opportunities (ROO-adjusted):</strong> {" ".join(_gap_parts)}
-            Realistic savings reflect qualification difficulty — Easy (90%), Moderate (70%), Hard (40%).
+            <strong>Largest savings opportunities:</strong> {" ".join(_gap_parts)}
         </div>
         """, unsafe_allow_html=True)
 
@@ -378,7 +370,7 @@ with tab_gap:
     _base_cols = [
         "origin_name", "dest_name", "goods_value_usd", "eligible_goods_value_usd",
         "has_stp", "stp_qualification_rate", "utilization_pct", "gen_duty_usd",
-        "stp_duty_usd", "excess_duty_usd", "roo_adjusted_excess_duty", "programs_str",
+        "stp_duty_usd", "excess_duty_usd", "programs_str",
     ]
     if _has_fta:
         _base_cols += ["fta_name", "fta_difficulty", "fta_rule_summary"]
@@ -391,7 +383,7 @@ with tab_gap:
         "Origin", "Destination", "Goods Value ($)", "Eligible Value ($)",
         "STP Status", "Qualification Rate", "Utilization at Customs",
         "Est. GEN Duty ($)", "Est. STP Duty ($)", "Excess Duty ($)",
-        "ROO-Adjusted Savings ($)", "Programs",
+        "Programs",
     ]
     if _has_fta:
         _col_names += ["Best FTA", "Difficulty", "Key Rule"]
@@ -449,11 +441,6 @@ with tab_gap:
         f"${v:,.0f}" if stp and ep >= 0.01 else "N/A"
         for v, stp, ep in zip(display_lanes["excess_duty_usd"], _has_stp_raw, _eligible_pct_raw)
     ]
-    display_table["ROO-Adjusted Savings ($)"] = [
-        f"${v:,.0f}" if stp and ep >= 0.01 else "N/A"
-        for v, stp, ep in zip(display_lanes["roo_adjusted_excess_duty"], _has_stp_raw, _eligible_pct_raw)
-    ]
-
     # For non-STP lanes: show FTA info if there's a potential program (awareness),
     # suppress if there's genuinely no program available.
     if _has_fta:
@@ -477,28 +464,27 @@ with tab_gap:
     st.dataframe(display_table, use_container_width=True, hide_index=True, height=500)
 
     # ── Excess duty by origin ──
-    st.markdown('<div class="section-header">Savings Opportunity by Sourcing Country (ROO-Adjusted)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">Savings Opportunity by Sourcing Country</div>', unsafe_allow_html=True)
 
     excess_by_origin = (
         gap_lanes.groupby("origin_name").agg(
             excess_duty_usd=("excess_duty_usd", "sum"),
-            roo_adjusted_excess_duty=("roo_adjusted_excess_duty", "sum"),
         )
         .reset_index()
-        .sort_values("roo_adjusted_excess_duty", ascending=False)
+        .sort_values("excess_duty_usd", ascending=False)
     )
     if not excess_by_origin.empty:
         fig_origin = px.bar(
             excess_by_origin,
             x="origin_name",
-            y="roo_adjusted_excess_duty",
+            y="excess_duty_usd",
             color_discrete_sequence=[NIKE_ORANGE],
-            text=excess_by_origin["roo_adjusted_excess_duty"].apply(fmt_usd),
+            text=excess_by_origin["excess_duty_usd"].apply(fmt_usd),
         )
         fig_origin.update_layout(
             height=350, margin=dict(t=20, b=40),
             xaxis_title="Sourcing Country",
-            yaxis_title="ROO-Adjusted Savings ($)",
+            yaxis_title="Excess Duty ($)",
             yaxis_tickprefix="$", yaxis_tickformat=",",
             plot_bgcolor="white", showlegend=False,
         )
@@ -515,23 +501,13 @@ with tab_recovery:
     psc_window_start = (pd.Timestamp.now() - pd.Timedelta(days=PSC_WINDOW_DAYS)).strftime("%b %d, %Y")
 
     if recovery_df is not None and not recovery_df.empty:
-        _roo_lookup = lanes.set_index(
-            ["country_of_origin_cd", "country_of_destination_cd"]
-        )["roo_discount"].to_dict()
-        recovery_df["roo_discount"] = recovery_df.apply(
-            lambda r: _roo_lookup.get((r["country_of_origin_cd"], r["country_of_destination_cd"]), 0.50),
-            axis=1,
-        )
-        recovery_df["roo_adjusted_recovery"] = recovery_df["estimated_recovery"] * recovery_df["roo_discount"]
-
         total_recovery = recovery_df["estimated_recovery"].sum()
-        total_roo_recovery = recovery_df["roo_adjusted_recovery"].sum()
         total_declarations = recovery_df["declaration_count"].sum()
         total_gen_paid = recovery_df["gen_duty_paid"].sum()
         total_duty_savings = recovery_df["duty_savings"].sum()
 
         col_r1, col_r2, col_r3, col_r4 = st.columns(4)
-        col_r1.metric("ROO-Adjusted Recovery", fmt_usd(total_roo_recovery), delta=f"Max: {fmt_usd(total_recovery)}", delta_color="off")
+        col_r1.metric("Estimated Recovery", fmt_usd(total_recovery))
         col_r2.metric("Declarations in Window", f"{total_declarations:,.0f}")
         col_r3.metric("Full Duty Savings (if all qualify)", fmt_usd(total_duty_savings))
         col_r4.metric("PSC Window Start", psc_window_start)
@@ -542,9 +518,7 @@ with tab_recovery:
             declarations paid General duty rates on lanes where STP eligibility exists.
             The estimated GEN duty on these entries totals <strong>{fmt_usd(total_gen_paid)}</strong> vs
             <strong>{fmt_usd(total_gen_paid - total_duty_savings)}</strong> under STP rates.
-            Discounted by qualification rate, the maximum estimated recovery is <strong>{fmt_usd(total_recovery)}</strong>.
-            Adjusted for Rules of Origin qualification difficulty, the realistic recovery is
-            <strong>{fmt_usd(total_roo_recovery)}</strong>.
+            Discounted by qualification rate, the estimated recovery is <strong>{fmt_usd(total_recovery)}</strong>.
             Under 19 USC 1514, importers have 180 days from liquidation to file a PSC.
             <br><br>
             <em>Duty amounts estimated using MFN base rates (from HTS tariff schedule) + FY26 tariff surcharges
@@ -557,7 +531,7 @@ with tab_recovery:
         recovery_display = recovery_df[[
             "origin_name", "dest_name", "declaration_count",
             "gen_duty_paid", "stp_qualification_rate", "estimated_recovery",
-            "roo_adjusted_recovery", "earliest", "latest",
+            "earliest", "latest",
         ]].copy()
 
         earliest_dt = pd.to_datetime(recovery_display["earliest"])
@@ -566,13 +540,12 @@ with tab_recovery:
 
         recovery_display.columns = [
             "Origin", "Destination", "Declarations",
-            "Est. GEN Duty ($)", "STP Qual. Rate", "Max Recovery ($)",
-            "ROO-Adjusted ($)", "First Declaration", "Last Declaration",
+            "Est. GEN Duty ($)", "STP Qual. Rate", "Est. Recovery ($)",
+            "First Declaration", "Last Declaration",
         ]
         recovery_display["Est. GEN Duty ($)"] = recovery_display["Est. GEN Duty ($)"].apply(lambda x: f"${x:,.0f}")
         recovery_display["STP Qual. Rate"] = recovery_display["STP Qual. Rate"].apply(lambda x: f"{x:.1%}")
-        recovery_display["Max Recovery ($)"] = recovery_display["Max Recovery ($)"].apply(lambda x: f"${x:,.0f}")
-        recovery_display["ROO-Adjusted ($)"] = recovery_display["ROO-Adjusted ($)"].apply(lambda x: f"${x:,.0f}")
+        recovery_display["Est. Recovery ($)"] = recovery_display["Est. Recovery ($)"].apply(lambda x: f"${x:,.0f}")
         recovery_display["First Declaration"] = pd.to_datetime(recovery_display["First Declaration"]).dt.strftime("%Y-%m-%d")
         recovery_display["Last Declaration"] = pd.to_datetime(recovery_display["Last Declaration"]).dt.strftime("%Y-%m-%d")
         recovery_display["Days Remaining"] = days_remaining.apply(
@@ -897,8 +870,6 @@ with tab_sim:
             _to_fta = get_fta_info_for_origin(to_cd, dest_cd, _fta_agreements) if _fta_agreements else {}
             _after_fta_diff = _to_fta.get("difficulty", "—")
 
-            _before_roo = get_roo_discount(_before_fta_diff)
-            _after_roo = get_roo_discount(_after_fta_diff)
 
             # Blended before duty: portion already at STP rate + remainder at GEN rate
             before_effective_rate = (before_util * before_stp_rate) + ((1 - before_util) * before_gen_rate)
@@ -908,13 +879,7 @@ with tab_sim:
             after_effective_rate = (after_qual * after_stp_rate) + ((1 - after_qual) * after_gen_rate)
             after_duty_max = shifted_value * after_effective_rate
 
-            # After duty (ROO-adjusted): discount qualification rate by ROO probability
-            _roo_adj_qual = after_qual * _after_roo
-            after_roo_rate = (_roo_adj_qual * after_stp_rate) + ((1 - _roo_adj_qual) * after_gen_rate)
-            after_duty_roo = shifted_value * after_roo_rate
-
-            duty_delta_max = after_duty_max - before_duty
-            duty_delta_roo = after_duty_roo - before_duty
+            duty_delta = after_duty_max - before_duty
 
             sim_results.append({
                 "Destination": dest_name,
@@ -930,24 +895,19 @@ with tab_sim:
                 "After Difficulty": _after_fta_diff,
                 "After Key Rule": _to_fta.get("rule_summary", "—"),
                 "Before Duty": before_duty,
-                "After Duty (max)": after_duty_max,
-                "After Duty (ROO-adj)": after_duty_roo,
-                "Duty Delta (max)": duty_delta_max,
-                "Duty Delta (ROO-adj)": duty_delta_roo,
+                "After Duty": after_duty_max,
+                "Duty Delta": duty_delta,
             })
 
         sim_df = pd.DataFrame(sim_results)
 
         if not sim_df.empty:
-            total_delta_roo = sim_df["Duty Delta (ROO-adj)"].sum()
-            total_delta_max = sim_df["Duty Delta (max)"].sum()
+            total_delta = sim_df["Duty Delta"].sum()
             total_shifted = sim_df["Shifted Value"].sum()
 
             sim_m1, sim_m2, sim_m3, sim_m4 = st.columns(4)
             sim_m1.metric("Volume Shifted", fmt_usd(total_shifted))
-            sim_m2.metric("Net Duty Impact (ROO-adj)", fmt_usd(total_delta_roo),
-                          delta=f"Max: {fmt_usd(total_delta_max)}",
-                          delta_color="off")
+            sim_m2.metric("Net Duty Impact", fmt_usd(total_delta))
             new_programs = sim_df[sim_df["After STP"] != "None"]["After STP"].nunique()
             lost_programs = sim_df[(sim_df["Before STP"] != "None") & (sim_df["After STP"] == "None")].shape[0]
             sim_m3.metric("New STP Access", f"{new_programs} programs")
@@ -959,9 +919,8 @@ with tab_sim:
             display_sim["After Qualification"] = display_sim["After Qualification"].apply(lambda x: f"{x:.1%}")
             display_sim["After Utilization"] = display_sim["After Utilization"].apply(lambda x: f"{x:.1%}")
             display_sim["Before Duty"] = display_sim["Before Duty"].apply(lambda x: f"${x:,.0f}")
-            display_sim["After Duty (max)"] = display_sim["After Duty (max)"].apply(lambda x: f"${x:,.0f}")
-            display_sim["After Duty (ROO-adj)"] = display_sim["After Duty (ROO-adj)"].apply(lambda x: f"${x:,.0f}")
-            display_sim["Duty Delta (ROO-adj)"] = display_sim["Duty Delta (ROO-adj)"].apply(
+            display_sim["After Duty"] = display_sim["After Duty"].apply(lambda x: f"${x:,.0f}")
+            display_sim["Duty Delta"] = display_sim["Duty Delta"].apply(
                 lambda x: f"-${abs(x):,.0f}" if x < 0 else f"+${x:,.0f}"
             )
 
@@ -969,27 +928,27 @@ with tab_sim:
                 "Destination", "Shifted Value",
                 "Before STP", "Before FTA", "Before Difficulty", "Before Utilization",
                 "After STP", "After FTA", "After Difficulty", "After Key Rule", "After Qualification",
-                "Before Duty", "After Duty (ROO-adj)", "Duty Delta (ROO-adj)",
+                "Before Duty", "After Duty", "Duty Delta",
             ]
             _sim_display_cols = [c for c in _sim_display_cols if c in display_sim.columns]
 
             st.dataframe(display_sim[_sim_display_cols], use_container_width=True, hide_index=True)
 
-            _sorted_sim = sim_df.sort_values("Duty Delta (ROO-adj)")
+            _sorted_sim = sim_df.sort_values("Duty Delta")
             fig_sim = px.bar(
                 _sorted_sim,
-                x="Destination", y="Duty Delta (ROO-adj)",
-                color=_sorted_sim["Duty Delta (ROO-adj)"].apply(
+                x="Destination", y="Duty Delta",
+                color=_sorted_sim["Duty Delta"].apply(
                     lambda x: "Savings" if x < 0 else "Increase"
                 ),
                 color_discrete_map={"Savings": SAVINGS_GREEN, "Increase": GAP_RED},
-                text=_sorted_sim["Duty Delta (ROO-adj)"].apply(
+                text=_sorted_sim["Duty Delta"].apply(
                     lambda x: f"-{fmt_usd(abs(x))}" if x < 0 else f"+{fmt_usd(x)}"
                 ),
             )
             fig_sim.update_layout(
                 height=350, margin=dict(t=20, b=30),
-                plot_bgcolor="white", yaxis_title="Duty Impact — ROO-Adjusted ($)",
+                plot_bgcolor="white", yaxis_title="Duty Impact ($)",
                 legend_title="", showlegend=True,
             )
             fig_sim.update_traces(textposition="outside")
@@ -1005,16 +964,15 @@ with tab_sim:
                 _fta_context = (
                     f'<br><strong>FTA qualification at {to_origin}:</strong> {_to_fta_name} — '
                     f'<span style="color:{_diff_color};font-weight:600;">{_to_diff}</span> '
-                    f'({_to_rule}). ROO discount: {get_roo_discount(_to_diff):.0%}'
+                    f'({_to_rule})'
                 )
             elif _to_fta_name == "None":
                 _fta_context = f'<br><strong>FTA availability at {to_origin} &rarr; US:</strong> <span style="color:{GAP_RED};">No FTA available</span> — MFN rates only.'
 
             st.markdown(f"""
             <div class="insight-box">
-                <strong>Interpretation (ROO-adjusted):</strong> Shifting {shift_pct:.0%} of volume from {from_origin} to {to_origin}
-                would {"<strong style='color:{0}'>save {1}/year</strong> (max: {2}) by gaining access to preferential STP rates".format(SAVINGS_GREEN, fmt_usd(abs(total_delta_roo)), fmt_usd(abs(total_delta_max))) if total_delta_roo < 0 else "<strong style='color:{0}'>increase duties by {1}/year</strong> — the destination STP coverage is weaker".format(GAP_RED, fmt_usd(abs(total_delta_roo)))}.
-                Savings are discounted by Rules of Origin qualification difficulty (Easy=90%, Moderate=70%, Hard=40%).
+                <strong>Interpretation:</strong> Shifting {shift_pct:.0%} of volume from {from_origin} to {to_origin}
+                would {"<strong style='color:{0}'>save {1}/year</strong> by gaining access to preferential STP rates".format(SAVINGS_GREEN, fmt_usd(abs(total_delta))) if total_delta < 0 else "<strong style='color:{0}'>increase duties by {1}/year</strong> — the destination STP coverage is weaker".format(GAP_RED, fmt_usd(abs(total_delta)))}.
                 {_fta_context}
             </div>
             """, unsafe_allow_html=True)
@@ -1069,7 +1027,6 @@ with tab_util:
         ranking_effective = ranking[ranking["eligible_pct"] >= 0.01]
         ranking_gap = ranking_effective[ranking_effective["is_gap_lane"]]
         ranking_gap_excess = ranking_gap["excess_duty_usd"].sum()
-        ranking_gap_roo_excess = ranking_gap["roo_adjusted_excess_duty"].sum()
 
         # Separate lanes into eligible vs product-excluded for clearer display
         _eligible_ranking = ranking[ranking["eligible_pct"] >= 0.01]
@@ -1127,10 +1084,10 @@ with tab_util:
                         <div style="font-size:11px; color:#757575;">{status} utilization</div>
                     </div>
                     <div style="text-align:right; min-width:140px;">
-                        <div style="font-size:16px; font-weight:600; color:{GAP_RED if lane['roo_adjusted_excess_duty'] > 0 else NIKE_GRAY};">
-                            {fmt_usd(lane['roo_adjusted_excess_duty'], 0)}
+                        <div style="font-size:16px; font-weight:600; color:{GAP_RED if lane['excess_duty_usd'] > 0 else NIKE_GRAY};">
+                            {fmt_usd(lane['excess_duty_usd'], 0)}
                         </div>
-                        <div style="font-size:11px; color:#757575;">ROO-adj savings (max {fmt_usd(lane['excess_duty_usd'], 0)})</div>
+                        <div style="font-size:11px; color:#757575;">excess duty</div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -1144,9 +1101,9 @@ with tab_util:
             <div style="text-align:right; min-width:120px;"></div>
             <div style="text-align:right; min-width:140px;">
                 <div style="font-size:18px; font-weight:700; color:{GAP_RED};">
-                    {fmt_usd(ranking_gap_roo_excess, 0)}
+                    {fmt_usd(ranking_gap_excess, 0)}
                 </div>
-                <div style="font-size:11px; color:#757575;">ROO-adj savings (max {fmt_usd(ranking_gap_excess, 0)})</div>
+                <div style="font-size:11px; color:#757575;">excess duty on gap lanes</div>
             </div>
         </div>
         """, unsafe_allow_html=True)

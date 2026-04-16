@@ -742,6 +742,8 @@ def build_claim_packages(recovery_df: pd.DataFrame) -> list[dict]:
             "duty_savings": float(row["duty_savings"]),
             "window_start": row["earliest"].strftime("%Y-%m-%d") if pd.notna(row.get("earliest")) else "N/A",
             "window_end": row["latest"].strftime("%Y-%m-%d") if pd.notna(row.get("latest")) else "N/A",
+            "earliest_days_remaining": max(0, PSC_WINDOW_DAYS - (pd.Timestamp.now() - row["earliest"]).days) if pd.notna(row.get("earliest")) else 0,
+            "latest_days_remaining": max(0, PSC_WINDOW_DAYS - (pd.Timestamp.now() - row["latest"]).days) if pd.notna(row.get("latest")) else 0,
             "hts_codes": hts_list[:15],
             "hts_detail": hts_detail,
             "required_documents": _get_required_documents(origin, dest, row.get("stp_programs", [])),
@@ -865,8 +867,8 @@ def load_claims_detail(stp_df: pd.DataFrame) -> pd.DataFrame:
         de.ACCEPTANCE_TMST AS acceptance_tmst,
         de.DECLARATION_ENTRY_UUID AS declaration_entry_uid,
         de.DECLARATION_STATUS_DESC AS declaration_status_desc,
-        '' AS declaration_identification_nbr,
-        '' AS filing_reference_nbr
+        de.LOCAL_REFERENCE_NBR AS declaration_identification_nbr,
+        de.LOCAL_REFERENCE_NBR AS filing_reference_nbr
     FROM {PUB}.trade_goods_item_v tgi
     JOIN {PUB}.declaration_trade_shipment_v dts
         ON tgi.DECLARATION_TRADE_SHIPMENT_UUID = dts.DECLARATION_TRADE_SHIPMENT_UUID

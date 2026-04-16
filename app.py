@@ -581,9 +581,10 @@ with tab_recovery:
             "earliest", "latest",
         ]].copy()
 
+        latest_dt = pd.to_datetime(recovery_display["latest"])
         earliest_dt = pd.to_datetime(recovery_display["earliest"])
-        days_remaining = PSC_WINDOW_DAYS - (pd.Timestamp.now() - earliest_dt).dt.days
-        days_remaining = days_remaining.clip(lower=0)
+        days_to_earliest_expiry = (PSC_WINDOW_DAYS - (pd.Timestamp.now() - earliest_dt).dt.days).clip(lower=0)
+        days_to_latest_expiry = (PSC_WINDOW_DAYS - (pd.Timestamp.now() - latest_dt).dt.days).clip(lower=0)
 
         recovery_display.columns = [
             "Origin", "Destination", "Declarations",
@@ -595,9 +596,12 @@ with tab_recovery:
         recovery_display["Est. Recovery ($)"] = recovery_display["Est. Recovery ($)"].apply(lambda x: f"${x:,.0f}")
         recovery_display["First Declaration"] = pd.to_datetime(recovery_display["First Declaration"]).dt.strftime("%Y-%m-%d")
         recovery_display["Last Declaration"] = pd.to_datetime(recovery_display["Last Declaration"]).dt.strftime("%Y-%m-%d")
-        recovery_display["Days Remaining"] = days_remaining.apply(
-            lambda d: f"{d} days" if d > 30 else f"{d} days ⚠️" if d > 0 else "EXPIRED"
-        )
+        recovery_display["Urgency"] = [
+            f"⚠️ {int(e)} days (earliest expiring)" if e <= 30 and e > 0
+            else f"EXPIRED" if e == 0
+            else f"{int(l)} – {int(e)} days"
+            for e, l in zip(days_to_earliest_expiry, days_to_latest_expiry)
+        ]
 
         st.dataframe(recovery_display.head(20), use_container_width=True, hide_index=True)
 
@@ -669,6 +673,8 @@ with tab_recovery:
                             <tr><td style="color:#757575;">Est. Duty Savings</td><td style="font-weight:600;">${pkg['duty_savings']:,.0f}</td></tr>
                             <tr><td style="color:#757575;">Estimated Recovery</td><td style="font-weight:600; color:{SAVINGS_GREEN};">${pkg['estimated_recovery']:,.0f}</td></tr>
                             <tr><td style="color:#757575;">Declaration Window</td><td style="font-weight:600;">{pkg['window_start']} to {pkg['window_end']}</td></tr>
+                            <tr><td style="color:#757575;">PSC Deadline (earliest)</td><td style="font-weight:600; color:{GAP_RED if pkg.get('earliest_days_remaining', 0) <= 30 else NIKE_GRAY};">{pkg.get('earliest_days_remaining', 'N/A')} days remaining</td></tr>
+                            <tr><td style="color:#757575;">PSC Deadline (latest)</td><td style="font-weight:600;">{pkg.get('latest_days_remaining', 'N/A')} days remaining</td></tr>
                         </table>
                     </div>
                     """, unsafe_allow_html=True)
